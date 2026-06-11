@@ -1,0 +1,7 @@
+nairobi_urban_intelligence:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', '../data/nairobi.duckdb') }}"
+      threads: 4

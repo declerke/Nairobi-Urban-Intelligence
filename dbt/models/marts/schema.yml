@@ -1,0 +1,73 @@
+version: 2
+
+models:
+  - name: stg_poi
+    description: >
+      Cleaned and validated POIs fetched from OpenStreetMap via OSMnx.
+      Each row represents one point-of-interest (hospital, school, market, bank, police, pharmacy, clinic, university).
+    columns:
+      - name: poi_id
+        description: Universally unique identifier for each POI (UUID v4).
+        tests:
+          - unique
+          - not_null
+
+      - name: amenity
+        description: Amenity type from OpenStreetMap.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - hospital
+                - clinic
+                - school
+                - university
+                - bank
+                - police
+                - market
+                - pharmacy
+
+      - name: latitude
+        description: WGS84 latitude of the POI centroid.
+        tests:
+          - not_null
+
+      - name: longitude
+        description: WGS84 longitude of the POI centroid.
+        tests:
+          - not_null
+
+  - name: poi_summary
+    description: >
+      Aggregated POI counts per amenity type and DBSCAN cluster,
+      enriched with average nearest-facility distances.
+    columns:
+      - name: cluster_label
+        description: DBSCAN cluster identifier (-1 = noise / unclustered).
+        tests:
+          - not_null
+
+      - name: amenity
+        description: Amenity type within this cluster.
+        tests:
+          - not_null
+
+  - name: service_deserts
+    description: >
+      All POIs with their service level classification.
+      Rows where is_underserved=TRUE are in zones more than 2 km from the nearest hospital.
+    columns:
+      - name: poi_id
+        description: FK to stg_poi.poi_id.
+        tests:
+          - not_null
+
+      - name: service_level
+        description: "One of: served, underserved, critical."
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - served
+                - underserved
+                - critical
