@@ -1,6 +1,22 @@
 version: 2
 
 models:
+  - name: stg_clusters
+    description: >
+      Cluster shape metadata computed by spatial_analysis.py.
+      Each row represents one DBSCAN cluster (noise label -1 excluded).
+    columns:
+      - name: cluster_label
+        description: DBSCAN cluster identifier (>= 0).
+        tests:
+          - unique
+          - not_null
+
+      - name: n_pois
+        description: Total POIs in this cluster.
+        tests:
+          - not_null
+
   - name: stg_poi
     description: >
       Cleaned and validated POIs fetched from OpenStreetMap via OSMnx.

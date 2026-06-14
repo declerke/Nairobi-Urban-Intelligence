@@ -85,6 +85,12 @@ echo "  Spatial analysis complete."
 echo ""
 echo "[5/6] Running dbt transformations..."
 
+# Export an absolute DuckDB path so profiles.yml can resolve it regardless
+# of the working directory dbt is invoked from.
+REL_DUCKDB="${DUCKDB_PATH:-data/nairobi.duckdb}"
+export DUCKDB_PATH_ABS="${PROJECT_DIR}/${REL_DUCKDB}"
+echo "  DUCKDB_PATH_ABS=${DUCKDB_PATH_ABS}"
+
 cd "${PROJECT_DIR}/dbt"
 "${VENV_DIR}/bin/dbt" run --profiles-dir "${PROJECT_DIR}/dbt" --project-dir "${PROJECT_DIR}/dbt"
 "${VENV_DIR}/bin/dbt" test --profiles-dir "${PROJECT_DIR}/dbt" --project-dir "${PROJECT_DIR}/dbt"

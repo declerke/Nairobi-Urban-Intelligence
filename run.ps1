@@ -81,6 +81,7 @@ Write-Host "  Fetch complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "[4/6] Running spatial analysis (DBSCAN + distances)..." -ForegroundColor Yellow
 
+$env:PYTHONPATH = "$ProjectDir\src"
 & $PythonExe "$ProjectDir\src\spatial_analysis.py"
 if ($LASTEXITCODE -ne 0) { throw "spatial_analysis.py failed with exit code $LASTEXITCODE" }
 Write-Host "  Spatial analysis complete." -ForegroundColor Green
@@ -90,6 +91,13 @@ Write-Host "  Spatial analysis complete." -ForegroundColor Green
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "[5/6] Running dbt transformations..." -ForegroundColor Yellow
+
+# Export an absolute DuckDB path so profiles.yml can resolve it regardless
+# of the working directory dbt is invoked from.
+$RelDuckdbPath = if ($env:DUCKDB_PATH) { $env:DUCKDB_PATH } else { "data/nairobi.duckdb" }
+$AbsDuckdbPath = Join-Path $ProjectDir $RelDuckdbPath
+$env:DUCKDB_PATH_ABS = $AbsDuckdbPath
+Write-Host "  DUCKDB_PATH_ABS=$AbsDuckdbPath" -ForegroundColor Gray
 
 Push-Location "$ProjectDir\dbt"
 try {
@@ -122,8 +130,7 @@ Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Optionally auto-launch
-$AutoLaunch = [System.Environment]::GetEnvironmentVariable("AUTO_LAUNCH", "Process")
-if ($AutoLaunch -eq "true") {
+if ($env:AUTO_LAUNCH -eq "true") {
     $env:PYTHONPATH = "$ProjectDir\src"
     & $StreamlitExe run "$ProjectDir\dashboard\app.py"
 }

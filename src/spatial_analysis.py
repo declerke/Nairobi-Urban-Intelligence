@@ -12,7 +12,6 @@ Run:
 from __future__ import annotations
 
 import math
-import os
 from pathlib import Path
 
 import duckdb
@@ -23,6 +22,7 @@ from shapely.ops import nearest_points
 from sklearn.cluster import DBSCAN
 
 from utils import (
+    duckdb_insert_df,
     duckdb_path,
     get_env,
     get_logger,
@@ -73,7 +73,7 @@ def run_dbscan(df: pd.DataFrame) -> pd.DataFrame:
     df["cluster_label"] = db.labels_
 
     n_clusters = len(set(db.labels_)) - (1 if -1 in db.labels_ else 0)
-    n_noise = list(db.labels_).count(-1)
+    n_noise = int((db.labels_ == -1).sum())
     logger.info(
         "DBSCAN result: %d clusters, %d noise points (of %d total)",
         n_clusters,
@@ -99,23 +99,33 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def nearest_facility_distance(
     row: pd.Series,
-    facility_df: pd.DataFrame,
+    candidates,
 ) -> float:
     """
-    Return the distance in km from row (lat, lon) to the nearest point in facility_df.
-    Returns float('inf') if facility_df is empty.
+    Return the distance in km from row (lat, lon) to the nearest point in candidates.
+
+    Parameters
+    ----------
+    candidates : MultiPoint or pd.DataFrame
+        Either a Shapely MultiPoint, or a DataFrame with 'latitude' / 'longitude' columns.
+    Returns float('inf') if candidates is empty or None.
     """
-    if facility_df.empty:
+    # Normalise: accept a DataFrame and build a MultiPoint from it.
+    if isinstance(candidates, pd.DataFrame):
+        if candidates.empty:
+            return float("inf")
+        mp = MultiPoint(
+            list(zip(candidates["longitude"].values, candidates["latitude"].values))
+        )
+    else:
+        mp = candidates
+
+    if mp is None or mp.is_empty:
         return float("inf")
 
-    # Use shapely nearest_points with a MultiPoint for spatial index efficiency
     pt = Point(row["longitude"], row["latitude"])
-    candidates = MultiPoint(
-        list(zip(facility_df["longitude"].values, facility_df["latitude"].values))
-    )
-    # nearest_points(geom_a, geom_b) returns (nearest_on_a, nearest_on_b).
-    # Index 1 is the nearest point ON the candidate set.
-    _, nearest_on_candidates = nearest_points(pt, candidates)
+    # nearest_points returns (nearest_on_a, nearest_on_b); index 1 is the candidate.
+    _, nearest_on_candidates = nearest_points(pt, mp)
     return haversine_km(row["latitude"], row["longitude"], nearest_on_candidates.y, nearest_on_candidates.x)
 
 
@@ -130,9 +140,9 @@ def compute_distances(df: pd.DataFrame) -> pd.DataFrame:
         service_desert_km,
     )
 
-    hospitals = df[df["amenity"] == "hospital"][["latitude", "longitude"]].copy()
-    schools = df[df["amenity"].isin(["school", "university"])][["latitude", "longitude"]].copy()
-    markets = df[df["amenity"] == "market"][["latitude", "longitude"]].copy()
+    hospitals = df[df["amenity"] == "hospital"][["latitude", "longitude"]]
+    schools = df[df["amenity"].isin(["school", "university"])][["latitude", "longitude"]]
+    markets = df[df["amenity"] == "market"][["latitude", "longitude"]]
 
     logger.info(
         "Facility counts — hospitals: %d, schools: %d, markets: %d",
@@ -141,21 +151,29 @@ def compute_distances(df: pd.DataFrame) -> pd.DataFrame:
         len(markets),
     )
 
+    # Build MultiPoint once per facility type so nearest_points doesn't reconstruct it per row.
+    def _mp(fac_df: pd.DataFrame) -> MultiPoint:
+        return MultiPoint(list(zip(fac_df["longitude"].values, fac_df["latitude"].values)))
+
+    hospital_mp = _mp(hospitals) if not hospitals.empty else MultiPoint()
+    school_mp   = _mp(schools)   if not schools.empty   else MultiPoint()
+    market_mp   = _mp(markets)   if not markets.empty   else MultiPoint()
+
     df = df.copy()
 
     logger.info("Computing distances to nearest hospital…")
     df["nearest_hospital_km"] = df.apply(
-        lambda row: nearest_facility_distance(row, hospitals), axis=1
+        lambda row: nearest_facility_distance(row, hospital_mp), axis=1
     )
 
     logger.info("Computing distances to nearest school…")
     df["nearest_school_km"] = df.apply(
-        lambda row: nearest_facility_distance(row, schools), axis=1
+        lambda row: nearest_facility_distance(row, school_mp), axis=1
     )
 
     logger.info("Computing distances to nearest market…")
     df["nearest_market_km"] = df.apply(
-        lambda row: nearest_facility_distance(row, markets), axis=1
+        lambda row: nearest_facility_distance(row, market_mp), axis=1
     )
 
     # Flag underserved zones
@@ -226,19 +244,15 @@ def update_duckdb(df: pd.DataFrame, cluster_shapes: pd.DataFrame, db_path: Path)
     con = duckdb.connect(str(db_path))
 
     # Update raw_pois with cluster_label and distance columns
-    # Use a staging table approach for clean update
+    # Use a staging table approach for clean update.
+    # Register the DataFrame explicitly so DuckDB resolves it reliably
+    # regardless of calling scope.
+    analysis_cols = df[
+        ["poi_id", "cluster_label", "nearest_hospital_km",
+         "nearest_school_km", "nearest_market_km", "is_underserved"]
+    ]
     con.execute("DROP TABLE IF EXISTS analysis_staging")
-    con.execute("""
-        CREATE TABLE analysis_staging AS
-        SELECT
-            poi_id,
-            cluster_label,
-            nearest_hospital_km,
-            nearest_school_km,
-            nearest_market_km,
-            is_underserved
-        FROM df
-    """)
+    duckdb_insert_df(con, analysis_cols, "CREATE TABLE analysis_staging AS SELECT * FROM _df_tmp")
 
     con.execute("""
         UPDATE raw_pois
@@ -253,12 +267,13 @@ def update_duckdb(df: pd.DataFrame, cluster_shapes: pd.DataFrame, db_path: Path)
     """)
     con.execute("DROP TABLE IF EXISTS analysis_staging")
 
-    # Save cluster shapes
+    # Save cluster shapes.
+    # Register the DataFrame under an unambiguous view name before creating
+    # the persistent table, so DuckDB does not confuse the Python variable
+    # with the SQL table of the same name.
     if len(cluster_shapes) > 0:
         con.execute("DROP TABLE IF EXISTS cluster_shapes")
-        con.execute("""
-            CREATE TABLE cluster_shapes AS SELECT * FROM cluster_shapes
-        """)
+        duckdb_insert_df(con, cluster_shapes, "CREATE TABLE cluster_shapes AS SELECT * FROM _df_tmp")
         logger.info("Saved %d cluster shapes to DuckDB", len(cluster_shapes))
 
     # Verification query

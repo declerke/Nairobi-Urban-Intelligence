@@ -24,10 +24,11 @@ env/
 
 # Data files (large binaries)
 data/*.duckdb
-data/*.duckdb.wal
 data/*.gpkg
 data/*.parquet
 data/*.csv
+nairobi.duckdb
+*.duckdb.wal
 
 # dbt artifacts
 dbt/target/
@@ -51,6 +52,12 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Logs
+pipeline.log
+
+# OSMnx cache
+data/osmnx_cache/
 
 # Project summary (personal only)
 projectsummary.md

@@ -3,5 +3,8 @@ nairobi_urban_intelligence:
   outputs:
     dev:
       type: duckdb
-      path: "{{ env_var('DUCKDB_PATH', '../data/nairobi.duckdb') }}"
+      # DUCKDB_PATH must be an absolute path when running dbt from the dbt/
+      # subdirectory.  The run scripts export DUCKDB_PATH_ABS for this reason.
+      # Fall back to a path relative to the dbt/ directory for manual runs.
+      path: "{{ env_var('DUCKDB_PATH_ABS', '../data/nairobi.duckdb') }}"
       threads: 4

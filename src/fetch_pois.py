@@ -18,11 +18,11 @@ import geopandas as gpd
 import osmnx as ox
 import pandas as pd
 from dotenv import load_dotenv
-from shapely.geometry import mapping
 
 from utils import (
     VALID_AMENITY_TYPES,
     data_dir,
+    duckdb_insert_df,
     duckdb_path,
     get_env,
     get_logger,
@@ -76,6 +76,11 @@ def fetch_pois(place_name: str) -> gpd.GeoDataFrame:
     # Normalise: keep only the amenity column and geometry
     gdf = gdf_raw.copy()
     gdf = gdf.reset_index()
+
+    # OSMnx 2.x may return MultiIndex columns (e.g. from extra tags).
+    # Flatten to plain string column names before any column access.
+    if isinstance(gdf.columns, pd.MultiIndex):
+        gdf.columns = ["_".join(str(c) for c in col).strip("_") for col in gdf.columns]
 
     # Ensure amenity column exists
     if "amenity" not in gdf.columns:
@@ -193,9 +198,9 @@ def save_to_gpkg(
 ) -> None:
     """Save all layers to a GeoPackage file."""
     logger.info("Saving to GeoPackage: %s", path)
-    pois.to_file(str(path), layer="pois", driver="GPKG")
-    road_edges.to_file(str(path), layer="road_edges", driver="GPKG")
-    boundary.to_file(str(path), layer="boundary", driver="GPKG")
+    pois.to_file(str(path), layer="pois", driver="GPKG", engine="pyogrio")
+    road_edges.to_file(str(path), layer="road_edges", driver="GPKG", engine="pyogrio")
+    boundary.to_file(str(path), layer="boundary", driver="GPKG", engine="pyogrio")
     logger.info("GeoPackage saved.")
 
 
@@ -220,7 +225,7 @@ def load_to_duckdb(
             "name": pois["name"].where(pois["name"].notna(), None),
             "latitude": pois["latitude"],
             "longitude": pois["longitude"],
-            "geometry_wkt": pois["geometry"].apply(lambda g: g.wkt),
+            "geometry_wkt": pois.geometry.to_wkt(),
             "cluster_label": None,  # filled in by spatial_analysis.py
             "nearest_hospital_km": None,
             "nearest_school_km": None,
@@ -245,7 +250,7 @@ def load_to_duckdb(
             is_underserved    BOOLEAN DEFAULT FALSE
         )
     """)
-    con.execute("INSERT INTO raw_pois SELECT * FROM poi_df")
+    duckdb_insert_df(con, poi_df, "INSERT INTO raw_pois SELECT * FROM _df_tmp")
     logger.info("Inserted %d rows into raw_pois", len(poi_df))
 
     # --- raw_road_edges table ---
@@ -255,7 +260,7 @@ def load_to_duckdb(
                 "road_id": road_edges["road_id"],
                 "highway": road_edges["highway"].fillna("unclassified"),
                 "length_m": road_edges["length"] if "length" in road_edges.columns else 0.0,
-                "geometry_wkt": road_edges["geometry"].apply(lambda g: g.wkt),
+                "geometry_wkt": road_edges.geometry.to_wkt(),
             }
         )
         con.execute("DROP TABLE IF EXISTS raw_road_edges")
@@ -267,7 +272,7 @@ def load_to_duckdb(
                 geometry_wkt VARCHAR
             )
         """)
-        con.execute("INSERT INTO raw_road_edges SELECT * FROM road_df")
+        duckdb_insert_df(con, road_df, "INSERT INTO raw_road_edges SELECT * FROM _df_tmp")
         logger.info("Inserted %d rows into raw_road_edges", len(road_df))
 
     con.close()

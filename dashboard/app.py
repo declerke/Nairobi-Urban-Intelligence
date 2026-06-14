@@ -19,13 +19,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import duckdb
 import folium
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 from streamlit_folium import st_folium
 
-from utils import AMENITY_COLOURS, AMENITY_ICONS, duckdb_path, get_env
+from utils import AMENITY_COLOURS, AMENITY_ICONS, duckdb_path, format_km
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Colour constants
+# ---------------------------------------------------------------------------
+
+BG     = "#060b17"   # page background
+CARD   = "#0d1929"   # sidebar + metric cards
+ACCENT = "#00d26a"   # green accent (tabs, metric values, highlighted numbers)
+GOLD   = "#f5a623"   # warnings / secondary highlights
+TEXT   = "#e2e8f0"   # main text
+MUTED  = "#8896a5"   # captions, labels
+BLUE   = "#4299e1"   # info / road colours
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -42,40 +56,35 @@ st.set_page_config(
 # Custom CSS
 # ---------------------------------------------------------------------------
 
-st.markdown(
-    """
-    <style>
-    .main-header {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #1f4e79;
-        margin-bottom: 0.2rem;
-    }
-    .sub-header {
-        color: #555;
-        font-size: 0.9rem;
-        margin-bottom: 1.5rem;
-    }
-    .metric-card {
-        background: #f0f4fa;
-        border-radius: 8px;
-        padding: 12px 16px;
-        text-align: center;
-    }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #1f4e79;
-    }
-    .metric-label {
-        font-size: 0.8rem;
-        color: #666;
-        margin-top: 2px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown(f"""
+<style>
+html, body, [data-testid="stAppViewContainer"], .main {{
+    background-color: {BG} !important; color: {TEXT} !important;
+}}
+[data-testid="stSidebar"] {{ background-color: {CARD} !important; }}
+[data-testid="collapsedControl"],[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapsedControl"],button[aria-label="Close sidebar"],
+button[aria-label="Open sidebar"] {{ display: none !important; }}
+span.material-symbols-rounded,span.material-symbols-outlined,span.material-icons {{
+    visibility: hidden !important; font-size: 0 !important;
+}}
+[data-testid="stTabs"] button {{ color: {MUTED} !important; border-bottom: 2px solid transparent; }}
+[data-testid="stTabs"] button[aria-selected="true"] {{
+    color: {ACCENT} !important; border-bottom: 2px solid {ACCENT} !important;
+}}
+[data-testid="stMetric"] {{
+    background: {CARD} !important; border: 1px solid #1e2d3d !important;
+    border-radius: 8px !important; padding: 16px 20px !important;
+}}
+[data-testid="stMetricValue"] {{ color: {ACCENT} !important; font-size: 1.8rem !important; }}
+[data-testid="stMetricLabel"] {{ color: {MUTED} !important; }}
+[data-testid="stDataFrame"] {{ background: {CARD} !important; }}
+h1, h2, h3, h4 {{ color: {TEXT} !important; }}
+hr {{ border-color: #1e2d3d !important; }}
+.stTabs [data-baseweb="tab-panel"] {{ background: {BG} !important; }}
+[data-testid="stExpander"] {{ background: {CARD} !important; border: 1px solid #1e2d3d !important; border-radius: 8px !important; }}
+</style>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Data loading (cached)
@@ -184,47 +193,80 @@ def base_map(zoom: int = 12) -> folium.Map:
     )
 
 
+def render_map(m: folium.Map, height: int = 580) -> None:
+    st_folium(m, width=None, height=height, returned_objects=[], use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
+# Helper: styled section header
+# ---------------------------------------------------------------------------
+
+def section_header(title: str, subtitle: str = "") -> None:
+    subtitle_html = (
+        f"<div style='color:{MUTED};font-size:0.85rem;margin-top:2px;'>{subtitle}</div>"
+        if subtitle else ""
+    )
+    st.markdown(f"""
+    <div style="margin-bottom:12px;">
+      <div style="font-size:1.25rem;font-weight:700;color:{TEXT};">{title}</div>
+      {subtitle_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
 # ---------------------------------------------------------------------------
 # Tab 1 — POI Map
 # ---------------------------------------------------------------------------
 
 def render_poi_map(pois: pd.DataFrame, selected_amenities: list[str]) -> None:
-    st.subheader("Point of Interest Map")
-    st.caption("Color-coded markers by amenity type. Use the sidebar to filter.")
+    section_header(
+        "Point of Interest Map",
+        "Color-coded markers by amenity type. Use the sidebar to filter."
+    )
+
+    if pois.empty:
+        st.info("No POI data available. Run the pipeline first.")
+        return
 
     filtered = pois[pois["amenity"].isin(selected_amenities)] if selected_amenities else pois
 
     m = base_map()
 
-    # One FeatureGroup per amenity type (enables layer toggle)
-    groups: dict[str, folium.FeatureGroup] = {}
     for amenity in filtered["amenity"].unique():
-        fg = folium.FeatureGroup(name=amenity.capitalize(), show=True)
-        groups[amenity] = fg
-
-    for _, row in filtered.iterrows():
-        amenity = row["amenity"]
+        subset = filtered[filtered["amenity"] == amenity]
         colour = AMENITY_COLOURS.get(amenity, "gray")
-        icon_name = AMENITY_ICONS.get(amenity, "info-sign")
-        popup_html = f"""
-        <b>{amenity.capitalize()}</b><br>
-        {row.get('poi_name') or '<i>unnamed</i>'}<br>
-        <small>Lat: {row['latitude']:.5f}, Lon: {row['longitude']:.5f}</small><br>
-        <small>Nearest hospital: {row['nearest_hospital_km']:.2f} km</small>
-        """
-        folium.Marker(
-            location=[row["latitude"], row["longitude"]],
-            popup=folium.Popup(popup_html, max_width=220),
-            icon=folium.Icon(color=colour, icon=icon_name, prefix="glyphicon"),
-        ).add_to(groups[amenity])
-
-    for fg in groups.values():
-        fg.add_to(m)
+        features = [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [r.longitude, r.latitude]},
+                "properties": {
+                    "name": r.poi_name or "unnamed",
+                    "hosp": f"{r.nearest_hospital_km:.1f} km" if pd.notna(r.nearest_hospital_km) else "N/A",
+                },
+            }
+            for r in subset.itertuples(index=False)
+        ]
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": features},
+            name=amenity.capitalize(),
+            marker=folium.CircleMarker(
+                radius=6,
+                color=colour,
+                fill=True,
+                fill_color=colour,
+                fill_opacity=0.85,
+                weight=1,
+            ),
+            tooltip=folium.GeoJsonTooltip(
+                fields=["name", "hosp"],
+                aliases=["POI:", "Nearest hospital:"],
+            ),
+        ).add_to(m)
 
     folium.LayerControl(collapsed=False).add_to(m)
-    st_folium(m, width="100%", height=600, returned_objects=[])
+    render_map(m, height=600)
 
-    # Stats
+    # Stats row
     col1, col2, col3 = st.columns(3)
     col1.metric("POIs shown", len(filtered))
     col2.metric("Amenity types", filtered["amenity"].nunique())
@@ -233,14 +275,28 @@ def render_poi_map(pois: pd.DataFrame, selected_amenities: list[str]) -> None:
         int(filtered["is_underserved"].sum()) if "is_underserved" in filtered.columns else "–",
     )
 
-    st.subheader("Amenity Breakdown")
-    breakdown = (
-        filtered["amenity"]
-        .value_counts()
-        .reset_index()
-        .rename(columns={"amenity": "Amenity", "count": "Count"})
+    # Plotly amenity breakdown
+    section_header("Amenity Breakdown")
+    breakdown = filtered["amenity"].value_counts().reset_index()
+    breakdown.columns = ["Amenity", "Count"]
+    fig = px.bar(
+        breakdown,
+        x="Count",
+        y="Amenity",
+        orientation="h",
+        color="Count",
+        color_continuous_scale=[CARD, ACCENT],
+        template="plotly_dark",
     )
-    st.dataframe(breakdown, use_container_width=True, hide_index=True)
+    fig.update_layout(
+        paper_bgcolor=BG,
+        plot_bgcolor=CARD,
+        showlegend=False,
+        coloraxis_showscale=False,
+        height=max(250, len(breakdown) * 35),
+        margin=dict(l=0, r=0, t=10, b=0),
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
@@ -248,11 +304,15 @@ def render_poi_map(pois: pd.DataFrame, selected_amenities: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 def render_service_deserts(deserts: pd.DataFrame) -> None:
-    st.subheader("Service Desert Analysis")
-    st.caption(
+    section_header(
+        "Service Desert Analysis",
         "Zones where the nearest hospital exceeds 2 km are flagged as underserved. "
-        "Critical zones exceed 5 km."
+        "Critical zones exceed 5 km.",
     )
+
+    if deserts.empty:
+        st.info("No service desert data available. Run the pipeline first.")
+        return
 
     # KPI row
     total = len(deserts)
@@ -262,60 +322,81 @@ def render_service_deserts(deserts: pd.DataFrame) -> None:
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total POIs", total)
-    c2.metric("Served (< 2 km)", served, delta=None)
-    c3.metric("Underserved (2-5 km)", underserved, delta=f"-{underserved}", delta_color="inverse")
+    c2.metric("Served (< 2 km)", served)
+    c3.metric("Underserved (2–5 km)", underserved, delta=f"-{underserved}", delta_color="inverse")
     c4.metric("Critical (> 5 km)", critical, delta=f"-{critical}", delta_color="inverse")
 
-    # Map
+    # Map — GeoJSON grouped by service_level
     m = base_map()
 
-    colour_map = {
-        "served": "green",
-        "underserved": "orange",
-        "critical": "red",
-    }
-
-    for _, row in deserts.iterrows():
-        service_level = row.get("service_level", "served")
-        colour = colour_map.get(service_level, "gray")
-        popup_html = f"""
-        <b>{row.get('amenity', '').capitalize()}</b><br>
-        {row.get('poi_name') or '<i>unnamed</i>'}<br>
-        <b>Service level:</b> {service_level}<br>
-        <small>Nearest hospital: {row['nearest_hospital_km']:.2f} km</small>
-        """
-        folium.CircleMarker(
-            location=[row["latitude"], row["longitude"]],
-            radius=6,
-            color=colour,
-            fill=True,
-            fill_opacity=0.7,
-            popup=folium.Popup(popup_html, max_width=200),
+    for level, colour in [("served", "#1a9850"), ("underserved", "#fc8d59"), ("critical", "#d73027")]:
+        subset = deserts[deserts["service_level"] == level] if "service_level" in deserts.columns else pd.DataFrame()
+        if subset.empty:
+            continue
+        features = [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [r.longitude, r.latitude]},
+                "properties": {
+                    "amenity": (r.amenity or "").capitalize(),
+                    "name": r.poi_name or "unnamed",
+                    "level": level,
+                    "hosp": f"{r.nearest_hospital_km:.1f} km" if pd.notna(r.nearest_hospital_km) else "N/A",
+                },
+            }
+            for r in subset.itertuples(index=False)
+        ]
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": features},
+            name=level.capitalize(),
+            marker=folium.CircleMarker(
+                radius=6,
+                color=colour,
+                fill=True,
+                fill_color=colour,
+                fill_opacity=0.75,
+                weight=1,
+            ),
+            tooltip=folium.GeoJsonTooltip(
+                fields=["amenity", "name", "level", "hosp"],
+                aliases=["Type:", "POI:", "Service level:", "Nearest hospital:"],
+            ),
         ).add_to(m)
 
-    # Legend
-    legend_html = """
-    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;background:white;
-                padding:10px 15px;border-radius:8px;border:1px solid #ccc;font-size:13px;">
-        <b>Service Level</b><br>
-        <span style="color:green;">&#9679;</span> Served (&lt; 2 km)<br>
-        <span style="color:orange;">&#9679;</span> Underserved (2–5 km)<br>
-        <span style="color:red;">&#9679;</span> Critical (&gt; 5 km)
+    # Legend (dark-themed)
+    legend_html = f"""
+    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
+                background:{CARD};padding:12px 16px;border-radius:8px;
+                border:1px solid #1e2d3d;font-size:13px;color:{TEXT};">
+        <b style="color:{TEXT};">Service Level</b><br>
+        <span style="color:#1a9850;">&#9679;</span> Served (&lt; 2 km)<br>
+        <span style="color:#fc8d59;">&#9679;</span> Underserved (2–5 km)<br>
+        <span style="color:#d73027;">&#9679;</span> Critical (&gt; 5 km)
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
-    st_folium(m, width="100%", height=580, returned_objects=[])
+    render_map(m)
 
-    # Distance distribution
-    st.subheader("Distance to Nearest Hospital — Distribution")
+    # Distance distribution — Plotly histogram
+    section_header("Distance to Nearest Hospital — Distribution")
     if "nearest_hospital_km" in deserts.columns:
-        hist_data = deserts[deserts["nearest_hospital_km"] < 9999]["nearest_hospital_km"]
-        st.bar_chart(
-            hist_data.value_counts(bins=20, sort=False).sort_index().rename("POI count"),
-            use_container_width=True,
+        fig = px.histogram(
+            deserts,
+            x="nearest_hospital_km",
+            nbins=30,
+            color_discrete_sequence=[ACCENT],
+            template="plotly_dark",
+            labels={"nearest_hospital_km": "Distance to Nearest Hospital (km)"},
         )
+        fig.update_layout(
+            paper_bgcolor=BG,
+            plot_bgcolor=CARD,
+            margin=dict(l=0, r=0, t=10, b=0),
+            height=280,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Table
+    # Underserved table
     with st.expander("View underserved POI records"):
         underserved_df = deserts[deserts["is_underserved"] == True][  # noqa: E712
             ["amenity", "poi_name", "latitude", "longitude", "nearest_hospital_km", "service_level"]
@@ -328,25 +409,26 @@ def render_service_deserts(deserts: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 
 def render_cluster_analysis(pois: pd.DataFrame, clusters: pd.DataFrame) -> None:
-    st.subheader("DBSCAN Cluster Analysis")
-    st.caption(
+    section_header(
+        "DBSCAN Cluster Analysis",
         "Spatial clusters identified using DBSCAN (eps ≈ 500 m, min_samples=3). "
-        "Cluster -1 = noise (isolated POIs)."
+        "Cluster -1 = noise (isolated POIs).",
     )
 
-    # Map with cluster colour coding
-    m = base_map()
+    if pois.empty:
+        st.info("No POI data available. Run the pipeline first.")
+        return
 
-    import hashlib
+    palette = [
+        "#e31a1c", "#4299e1", "#00d26a", "#9b59b6", "#f5a623",
+        "#1abc9c", "#e74c3c", "#3498db", "#2ecc71", "#8e44ad",
+    ]
 
     def cluster_colour(label: int) -> str:
-        if label == -1:
-            return "gray"
-        palette = [
-            "red", "blue", "green", "purple", "orange", "darkred",
-            "darkblue", "darkgreen", "cadetblue", "pink",
-        ]
-        return palette[abs(label) % len(palette)]
+        return "gray" if label == -1 else palette[abs(label) % len(palette)]
+
+    # Map
+    m = base_map()
 
     # Draw convex hulls for clusters (from cluster_shapes if available)
     if not clusters.empty and "hull_wkt" in clusters.columns:
@@ -378,29 +460,78 @@ def render_cluster_analysis(pois: pd.DataFrame, clusters: pd.DataFrame) -> None:
                 except Exception:
                     pass
 
-    # Draw POI markers
-    for _, row in pois.iterrows():
-        label = int(row.get("cluster_label", -1)) if pd.notna(row.get("cluster_label")) else -1
+    # GeoJSON grouped by cluster label
+    for label in sorted(pois["cluster_label"].dropna().unique()):
+        label = int(label)
         colour = cluster_colour(label)
-        folium.CircleMarker(
-            location=[row["latitude"], row["longitude"]],
-            radius=5,
-            color=colour,
-            fill=True,
-            fill_opacity=0.8,
-            popup=f"{row.get('amenity', '')} | Cluster {label}",
+        subset = pois[pois["cluster_label"] == label]
+        features = [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [r.longitude, r.latitude]},
+                "properties": {
+                    "amenity": (r.amenity or "").capitalize(),
+                    "cluster": str(label) if label != -1 else "noise",
+                },
+            }
+            for r in subset.itertuples(index=False)
+        ]
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": features},
+            name=f"Cluster {label}" if label != -1 else "Noise",
+            marker=folium.CircleMarker(
+                radius=5,
+                color=colour,
+                fill=True,
+                fill_color=colour,
+                fill_opacity=0.8,
+                weight=1,
+            ),
+            tooltip=folium.GeoJsonTooltip(
+                fields=["amenity", "cluster"],
+                aliases=["Type:", "Cluster:"],
+            ),
         ).add_to(m)
 
-    st_folium(m, width="100%", height=580, returned_objects=[])
+    render_map(m)
+
+    # Noise vs clustered metrics
+    noise_count = int((pois["cluster_label"] == -1).sum()) if "cluster_label" in pois.columns else 0
+    clustered_count = len(pois) - noise_count
+    n_clusters = (
+        pois["cluster_label"].nunique() - (1 if -1 in pois["cluster_label"].values else 0)
+        if "cluster_label" in pois.columns else 0
+    )
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total clusters", n_clusters)
+    col2.metric("Clustered POIs", clustered_count)
+    col3.metric("Noise POIs", noise_count)
+
+    # Plotly donut — clustered vs noise
+    if "cluster_label" in pois.columns:
+        fig = px.pie(
+            values=[clustered_count, noise_count],
+            names=["Clustered", "Noise (isolated)"],
+            color_discrete_sequence=[ACCENT, MUTED],
+            template="plotly_dark",
+            hole=0.5,
+        )
+        fig.update_layout(
+            paper_bgcolor=BG,
+            height=280,
+            margin=dict(l=0, r=0, t=20, b=0),
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     # Cluster statistics table
-    st.subheader("Cluster Statistics")
+    section_header("Cluster Statistics")
 
     if not clusters.empty:
         show_cols = [c for c in [
             "cluster_label", "amenity", "poi_count",
             "avg_hospital_km", "avg_school_km", "avg_market_km", "underserved_count",
-            "centroid_lat", "centroid_lon"
+            "centroid_lat", "centroid_lon",
         ] if c in clusters.columns]
         st.dataframe(clusters[show_cols], use_container_width=True, hide_index=True)
     else:
@@ -416,22 +547,16 @@ def render_cluster_analysis(pois: pd.DataFrame, clusters: pd.DataFrame) -> None:
         agg["avg_hospital_km"] = agg["avg_hospital_km"].round(2)
         st.dataframe(agg, use_container_width=True, hide_index=True)
 
-    # Noise vs clustered summary
-    noise_count = int((pois["cluster_label"] == -1).sum()) if "cluster_label" in pois.columns else 0
-    clustered_count = len(pois) - noise_count
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total clusters", pois["cluster_label"].nunique() - (1 if -1 in pois["cluster_label"].values else 0) if "cluster_label" in pois.columns else 0)
-    col2.metric("Clustered POIs", clustered_count)
-    col3.metric("Noise POIs", noise_count)
-
 
 # ---------------------------------------------------------------------------
 # Tab 4 — Road Network
 # ---------------------------------------------------------------------------
 
 def render_road_network(roads: pd.DataFrame) -> None:
-    st.subheader("Road Network Analysis")
-    st.caption("Drive network for Nairobi coloured by road classification.")
+    section_header(
+        "Road Network Analysis",
+        "Drive network for Nairobi coloured by road classification.",
+    )
 
     if roads.empty:
         st.info("Road network data not yet loaded. Run fetch_pois.py to fetch road data.")
@@ -439,14 +564,14 @@ def render_road_network(roads: pd.DataFrame) -> None:
 
     # Road type colour map
     highway_colours: dict[str, str] = {
-        "motorway": "#e31a1c",
-        "trunk": "#fd8d3c",
-        "primary": "#fecc5c",
-        "secondary": "#a1dab4",
-        "tertiary": "#41b6c4",
-        "residential": "#225ea8",
-        "unclassified": "#aaaaaa",
-        "service": "#cccccc",
+        "motorway":      "#e31a1c",
+        "trunk":         "#fd8d3c",
+        "primary":       "#fecc5c",
+        "secondary":     "#a1dab4",
+        "tertiary":      "#41b6c4",
+        "residential":   "#225ea8",
+        "unclassified":  "#aaaaaa",
+        "service":       "#cccccc",
     }
 
     m = base_map(zoom=12)
@@ -476,23 +601,24 @@ def render_road_network(roads: pd.DataFrame) -> None:
         except Exception:
             continue
 
-    # Road legend
+    # Road legend (dark-themed)
     legend_items = "".join(
         f'<span style="color:{c};">&#9644;</span> {h.capitalize()}<br>'
         for h, c in list(highway_colours.items())[:6]
     )
     legend_html = f"""
-    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;background:white;
-                padding:10px 15px;border-radius:8px;border:1px solid #ccc;font-size:13px;">
-        <b>Road Type</b><br>{legend_items}
+    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
+                background:{CARD};padding:12px 16px;border-radius:8px;
+                border:1px solid #1e2d3d;font-size:13px;color:{TEXT};">
+        <b style="color:{TEXT};">Road Type</b><br>{legend_items}
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
 
-    st_folium(m, width="100%", height=580, returned_objects=[])
+    render_map(m)
 
-    # Road stats
-    st.subheader("Road Statistics")
+    # Road stats — Plotly horizontal bar
+    section_header("Road Statistics")
     if "highway" in roads.columns:
         road_stats = (
             roads.groupby("highway")
@@ -503,7 +629,23 @@ def render_road_network(roads: pd.DataFrame) -> None:
             .reset_index()
             .sort_values("total_km", ascending=False)
         )
-        st.dataframe(road_stats, use_container_width=True, hide_index=True)
+        fig = px.bar(
+            road_stats.head(8),
+            x="total_km",
+            y="highway",
+            orientation="h",
+            color="total_km",
+            color_continuous_scale=[CARD, BLUE],
+            template="plotly_dark",
+        )
+        fig.update_layout(
+            paper_bgcolor=BG,
+            plot_bgcolor=CARD,
+            coloraxis_showscale=False,
+            height=300,
+            margin=dict(l=0, r=0, t=10, b=0),
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     total_km = roads["length_m"].sum() / 1000 if "length_m" in roads.columns else 0
     col1, col2 = st.columns(2)
@@ -516,14 +658,7 @@ def render_road_network(roads: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    # Header
-    st.markdown('<div class="main-header">Nairobi Urban Intelligence</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sub-header">Geospatial analytics for Nairobi — POI mapping, service deserts, DBSCAN clusters, road network</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Check DuckDB exists
+    # Check DuckDB exists before loading data so we can show a clear error
     db = duckdb_path()
     if not db.exists():
         st.error(
@@ -540,17 +675,44 @@ def main() -> None:
         roads = load_roads()
     except Exception as e:
         st.error(f"Failed to load data: {e}")
-        st.info("Make sure the pipeline has been run: `python src/fetch_pois.py && python src/spatial_analysis.py && dbt run`")
+        st.info(
+            "Make sure the pipeline has been run: "
+            "`python src/fetch_pois.py && python src/spatial_analysis.py && dbt run`"
+        )
         st.stop()
 
     if pois.empty:
         st.warning("No POI data found. Run the pipeline first.")
         st.stop()
 
+    # Styled banner header (placed after data load so real counts are available)
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,{CARD} 0%,#0a2040 100%);
+                border-left:4px solid {ACCENT};border-radius:8px;
+                padding:24px 28px;margin-bottom:20px;">
+      <div style="font-size:1.9rem;font-weight:800;color:{TEXT};letter-spacing:-0.5px;">
+        🗺️ Nairobi Urban Intelligence
+      </div>
+      <div style="color:{MUTED};font-size:0.95rem;margin-top:6px;">
+        Geospatial analytics · {len(pois):,} POIs · DBSCAN clusters · Road network · Service deserts
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     # Sidebar
     with st.sidebar:
-        st.title("Filters")
-        st.markdown("---")
+        st.markdown(f"""
+        <div style="padding:4px 0 16px;border-bottom:1px solid #1e2d3d;margin-bottom:16px;">
+          <div style="font-size:1.1rem;font-weight:700;color:{TEXT};">🗺️ Nairobi UI</div>
+          <div style="font-size:0.78rem;color:{MUTED};margin-top:2px;">Urban Intelligence Dashboard</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(
+            f"<div style='color:{MUTED};font-size:0.8rem;font-weight:600;"
+            f"text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;'>Filters</div>",
+            unsafe_allow_html=True,
+        )
 
         available_amenities = sorted(pois["amenity"].dropna().unique().tolist())
         selected_amenities = st.multiselect(
@@ -559,7 +721,10 @@ def main() -> None:
             default=available_amenities,
         )
 
-        available_clusters = sorted(pois["cluster_label"].dropna().unique().tolist()) if "cluster_label" in pois.columns else []
+        available_clusters = (
+            sorted(pois["cluster_label"].dropna().unique().tolist())
+            if "cluster_label" in pois.columns else []
+        )
         selected_clusters = st.multiselect(
             "Cluster labels (for POI map)",
             options=available_clusters,
@@ -567,22 +732,30 @@ def main() -> None:
         )
 
         st.markdown("---")
-        st.markdown("### Dataset Summary")
+        st.markdown(
+            f"<div style='color:{MUTED};font-size:0.8rem;font-weight:600;"
+            f"text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;'>Dataset</div>",
+            unsafe_allow_html=True,
+        )
         st.metric("Total POIs", len(pois))
         st.metric("Amenity types", pois["amenity"].nunique())
         if "cluster_label" in pois.columns:
-            n_clusters = pois["cluster_label"].nunique() - (1 if -1 in pois["cluster_label"].values else 0)
+            n_clusters = pois["cluster_label"].nunique() - (
+                1 if -1 in pois["cluster_label"].values else 0
+            )
             st.metric("DBSCAN clusters", n_clusters)
         if "is_underserved" in pois.columns:
             st.metric("Underserved zones", int(pois["is_underserved"].sum()))
 
-        st.markdown("---")
-        st.markdown(
-            "<small>Data: OpenStreetMap via OSMnx 2.1.0<br>"
-            "Analysis: DBSCAN spatial clustering<br>"
-            "DB: DuckDB + dbt-duckdb</small>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"""
+        <div style="margin-top:16px;padding:12px;background:{BG};border-radius:6px;border:1px solid #1e2d3d;">
+          <div style="font-size:0.75rem;color:{MUTED};line-height:1.6;">
+            📍 Source: OpenStreetMap via OSMnx 2.1.0<br>
+            🔬 Analysis: DBSCAN (eps=500m, min=3)<br>
+            💾 Pipeline: DuckDB + dbt-duckdb
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Filter pois by selected options
     filtered_pois = pois.copy()

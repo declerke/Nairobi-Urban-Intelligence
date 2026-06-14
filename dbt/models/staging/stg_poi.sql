@@ -32,9 +32,9 @@ cleaned AS (
         ROUND(longitude, 6)                           AS longitude,
         geometry_wkt,
         COALESCE(cluster_label, -1)                   AS cluster_label,
-        ROUND(COALESCE(nearest_hospital_km, 9999), 4) AS nearest_hospital_km,
-        ROUND(COALESCE(nearest_school_km,   9999), 4) AS nearest_school_km,
-        ROUND(COALESCE(nearest_market_km,   9999), 4) AS nearest_market_km,
+        ROUND(nearest_hospital_km, 4)                  AS nearest_hospital_km,
+        ROUND(nearest_school_km,   4)                  AS nearest_school_km,
+        ROUND(nearest_market_km,   4)                  AS nearest_market_km,
         COALESCE(is_underserved, FALSE)               AS is_underserved
     FROM source
 )

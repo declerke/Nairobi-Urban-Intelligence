@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import duckdb
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 load_dotenv()
 
@@ -95,6 +101,38 @@ def retry_with_backoff(fn, retries: int = 5, base_delay: float = 10.0):
                 wait,
             )
             time.sleep(wait)
+
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
+def format_km(v) -> str:
+    """Format a distance-in-km value for display; returns 'N/A' for None/NaN."""
+    try:
+        if v is None or math.isnan(float(v)):
+            return "N/A"
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{v:.2f} km"
+
+
+# ---------------------------------------------------------------------------
+# DuckDB helpers
+# ---------------------------------------------------------------------------
+
+def duckdb_insert_df(
+    con: duckdb.DuckDBPyConnection,
+    df: "pd.DataFrame",
+    sql: str,
+    tmp: str = "_df_tmp",
+) -> None:
+    """Register df under tmp, execute sql, then unregister."""
+    con.register(tmp, df)
+    try:
+        con.execute(sql)
+    finally:
+        con.unregister(tmp)
 
 
 # ---------------------------------------------------------------------------
