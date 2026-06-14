@@ -70,25 +70,25 @@ Nairobi Urban Intelligence builds the complete pipeline. OSMnx downloads current
 
 ### POI Map — 3,801 Points of Interest
 
-![POI Map](assets/poi_map.png)
+![POI Map](assets/nairobi_poi_map.png)
 
 *Dark-theme interactive Folium map of all 3,801 Nairobi POIs grouped by amenity type. Each of the 7 amenity categories (bank, clinic, hospital, pharmacy, police, school, university) renders as a single colour-coded GeoJSON layer. Sidebar filters select specific amenity types and cluster labels. Right panel: amenity breakdown bar chart and nearest-hospital distance histogram.*
 
 ### Service Deserts — Hospital Coverage Gap Analysis
 
-![Service Deserts](assets/service_deserts.png)
+![Service Deserts](assets/nairobi_service_deserts.png)
 
 *Per-POI service-level classification: Served (nearest hospital ≤1km, green), Underserved (1–2km, amber), Critical (>2km, red). Three GeoJSON FeatureCollections for clean single-layer rendering. Right panel shows service tier donut chart and summary metric cards.*
 
 ### Cluster Analysis — 49 DBSCAN Urban Activity Zones
 
-![Cluster Analysis](assets/cluster_analysis.png)
+![Cluster Analysis](assets/nairobi_cluster_analysis.png)
 
 *49 DBSCAN clusters rendered as colour-coded point groups cycling through a 10-colour palette. Cluster convex-hull polygons shown as overlays. Right panel: cluster-size bar chart and amenity composition pie chart. Noise points (label=-1) shown in grey.*
 
 ### Road Network — 90,008 Edge Infrastructure
 
-![Road Network](assets/road_network.png)
+![Road Network](assets/nairobi_road_network.png)
 
 *Road network statistics from 90,008 OSMnx drive-network edges. Plotly bar charts show road classification distribution and average speed by type. Metric cards show total edge count, unique road types, and average road length.*
 
