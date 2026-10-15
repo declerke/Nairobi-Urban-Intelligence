@@ -34,7 +34,7 @@ folium==0.19.5
 fonttools==4.63.0
 geopandas==1.1.2
 gitdb==4.0.12
-gitpython==3.1.59
+gitpython==3.1.60
 idna==3.18
 importlib-metadata==8.9.0
 iniconfig==2.3.0
@@ -109,11 +109,11 @@ threadpoolctl==3.6.0
 toml==0.10.2
 tomli==2.4.1
 tomli-w==1.2.0
-tornado==6.5.8
+tornado==6.5.9
 typing-extensions==4.15.0
 typing-inspection==0.4.2
 tzdata==2026.2
-urllib3==2.7.0
+urllib3==2.8.0
 watchdog==6.0.0
 xyzservices==2026.3.0
 zipp==4.1.0
